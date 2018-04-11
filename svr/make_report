@@ -1,0 +1,101 @@
+#!/usr/bin/env ruby
+
+#force UTF-8
+Encoding.default_internal = Encoding::UTF_8
+Encoding.default_external = Encoding::UTF_8
+
+require 'rubygems'
+require 'bundler/setup'
+require 'rest-client'
+require 'json'
+require 'ostruct'
+
+BASE_URL="https://swapi.co/api/starships"
+
+class SWReport
+  class << self
+    def run
+      instance = new
+      instance.load
+      instance.print
+    end
+  end
+
+  def initialize
+    @ships = []
+  end
+
+  def load(verbose=false)
+    puts "Stand by while the galactic database is accessed...\n"
+    ss_client = StarshipsClient.new(BASE_URL)
+    until ss_client.last_page?
+      @ships += ss_client.results
+      ss_client = ss_client.next
+    end
+    @ships += ss_client.results
+    @ships.sort_by!(&:name)
+  end
+
+  def print
+    @ships.each(&:print)
+  end
+end
+
+class StarshipsClient
+  attr_reader   :url
+  attr_accessor :last_page, :results
+  alias_method  :last_page?, :last_page
+
+  def initialize(url)
+    resp = RestClient.get(url)
+    raise "Error retreiving data from #{url}" unless resp.code == 200
+    parsed_body = JSON.parse(resp.body, object_class: OpenStruct)
+    @last_page = parsed_body.next.nil?
+    @next_page = parsed_body.next
+    @results = parsed_body.results.map {|ostruct| Starship.new ostruct}
+  end
+
+  def next
+    @next ||= StarshipsClient.new(@next_page) unless last_page?
+  end
+end
+
+class Starship
+  attr_reader :ostruct
+  def initialize(ostruct)
+    @ostruct = ostruct
+  end
+
+  def name
+    @name ||= ostruct.name
+  end
+
+  def pilots
+    @pilots ||= ostruct.pilots.map do |pilot|
+                  resp = RestClient.get(pilot)
+                  raise "Couldn't retrieve pilot" unless resp.code == 200
+                  Pilot.new(JSON.parse(resp.body, object_class: OpenStruct))
+                end
+  end
+
+  def print
+    puts "Starship name: #{name}"
+    puts "\tKnown pilots: #{pilots.empty? ? 'none' : ''}"
+    @pilots.each &:print
+    puts
+  end
+end
+
+class Pilot
+  attr_reader :ostruct
+
+  def initialize(ostruct)
+    @ostruct = ostruct
+  end
+
+  def print
+    puts "\t\t#{ostruct.name}"
+  end
+end
+
+SWReport.run
